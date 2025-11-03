@@ -4,7 +4,6 @@ import Foundation
 
 // --- Configuration ---
 let INTERVAL: TimeInterval = 15 * 60 // 900 seconds
-let VOICE_NAME = "Daniel" // The reliable voice we will always use
 
 // --- Global State ---
 let timeFormatter: DateFormatter = {
@@ -56,13 +55,17 @@ func say(_ text: String) {
     // Create a shell-safe version of the text
     let safeText = text.replacingOccurrences(of: "'", with: "'\\''")
     
-    // We *always* use the "Daniel" voice, as the Personal Voice is buggy.
-    shell("/usr/bin/say -v '\(VOICE_NAME)' '\(safeText)'")
+    // --- CHANGE 1: ---
+    // Run 'say' without the -v flag to use the system default voice
+    // (which you've confirmed is your Personal Voice).
+    shell("/usr/bin/say '\(safeText)'")
 }
 
 func sayTime() {
-    // Add a 100ms delay to ensure we are *just past* the mark
-    Thread.sleep(forTimeInterval: 0.1)
+    // --- CHANGE 2: ---
+    // Sleep for 500ms (0.5s) to ensure we are safely
+    // past the 'xx:xx:59.x' rounding error.
+    Thread.sleep(forTimeInterval: 0.5)
     
     let now = Date()
     let timeString = timeFormatter.string(from: now)
@@ -157,7 +160,7 @@ if sayNow {
 
 let waitTime = getWaitTimeForAlignment()
 print("Alignment complete. Starting main announcement loop.")
-print("Using voice: '\(VOICE_NAME)'")
+print("Using system default voice (Personal Voice).")
 
 let timer = Timer(
     fire: Date().addingTimeInterval(waitTime),
