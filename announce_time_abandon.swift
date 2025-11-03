@@ -1,0 +1,179 @@
+#!/usr/bin/swift
+
+import Foundation
+
+// --- Configuration ---
+let INTERVAL: TimeInterval = 15 * 60 // 900 seconds
+let VOICE_NAME = "Daniel" // The reliable voice we will always use
+
+// --- Global State ---
+let timeFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "HH:mm"
+    formatter.locale = Locale(identifier: "en_GB")
+    return formatter
+}()
+
+var signalSources: [DispatchSourceSignal] = []
+var isShuttingDown = false
+
+// MARK: - Core Functions
+
+/**
+ * Executes a shell command synchronously (blocking).
+ */
+@discardableResult
+func shell(_ command: String) -> (output: String, error: String, status: Int32) {
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/bin/zsh")
+    task.arguments = ["-c", command]
+
+    let outputPipe = Pipe()
+    let errorPipe = Pipe()
+    task.standardOutput = outputPipe
+    task.standardError = errorPipe
+
+    do {
+        try task.run()
+        task.waitUntilExit()
+        
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        
+        let output = String(data: outputData, encoding: .utf8) ?? ""
+        let error = String(data: errorData, encoding: .utf8) ?? ""
+        
+        return (output, error, task.terminationStatus)
+    } catch {
+        return ("", error.localizedDescription, -1)
+    }
+}
+
+/**
+ * Speaks the given text using the '/usr/bin/say' command.
+ */
+func say(_ text: String) {
+    // Create a shell-safe version of the text
+    let safeText = text.replacingOccurrences(of: "'", with: "'\\''")
+    
+    // We *always* use the "Daniel" voice, as the Personal Voice is buggy.
+    shell("/usr/bin/say -v '\(VOICE_NAME)' '\(safeText)'")
+}
+
+func sayTime() {
+    // Add a 100ms delay to ensure we are *just past* the mark
+    Thread.sleep(forTimeInterval: 0.1)
+    
+    let now = Date()
+    let timeString = timeFormatter.string(from: now)
+    let announcement = timeString
+    
+    let logTimestamp = now.formatted(
+        .dateTime.year().month().day().hour().minute().second()
+    )
+    print("[\(logTimestamp)] Announcing: \(announcement)")
+    
+    say(announcement)
+}
+
+func getWaitTimeForAlignment() -> TimeInterval {
+    let now = Date()
+    let calendar = Calendar.current
+    
+    let components = calendar.dateComponents(
+        [.minute, .second, .nanosecond],
+        from: now
+    )
+    
+    let minute = components.minute ?? 0
+    let second = components.second ?? 0
+    let nano = components.nanosecond ?? 0
+    
+    let secondsPastHour: TimeInterval = (
+        TimeInterval(minute * 60 + second) +
+        (TimeInterval(nano) / 1_000_000_000.0)
+    )
+    
+    let secondsPastMark = secondsPastHour.truncatingRemainder(dividingBy: INTERVAL)
+    let waitSeconds = INTERVAL - secondsPastMark
+    
+    let timeformat = now.formatted(date: .omitted, time: .standard)
+    print("Current time: \(timeformat)")
+    print(
+        "Waiting \(String(format: "%.2f", waitSeconds)) seconds to align with the next 15-minute mark..."
+    )
+    
+    return waitSeconds
+}
+
+// MARK: - Signal Handling
+
+func handleTerminationSignal() {
+    guard !isShuttingDown else {
+        return
+    }
+    isShuttingDown = true
+    
+    print("\nTermination signal received. Stopping time announcer...")
+    
+    signalSources.forEach { $0.cancel() }
+    signalSources.removeAll()
+    
+    DispatchQueue.global().async {
+        say("Stopping time announcer.")
+        print("Exiting.")
+        exit(0)
+    }
+}
+
+func trap(signal: Int32, handler: @escaping () -> Void) {
+    Foundation.signal(signal, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: signal, queue: .main)
+    source.setEventHandler {
+        handler()
+    }
+    source.resume()
+    signalSources.append(source)
+}
+
+// MARK: - Main Script Logic (Top-Level Code)
+
+// 1. Set up signal handlers
+trap(signal: SIGINT, handler: handleTerminationSignal)  // Ctrl+C
+trap(signal: SIGTERM, handler: handleTerminationSignal) // kill
+trap(signal: SIGHUP, handler: handleTerminationSignal)  // Terminal close
+
+// 2. Parse command-line arguments
+let args = CommandLine.arguments
+let sayNow = args.contains("--now")
+
+// 3. Main Program
+if sayNow {
+    print("`--now` flag detected. Announcing current time first.")
+    DispatchQueue.global().async {
+        sayTime()
+    }
+}
+
+let waitTime = getWaitTimeForAlignment()
+print("Alignment complete. Starting main announcement loop.")
+print("Using voice: '\(VOICE_NAME)'")
+
+let timer = Timer(
+    fire: Date().addingTimeInterval(waitTime),
+    interval: INTERVAL,
+    repeats: true
+) { _ in
+    
+    // We dispatch to a background thread so the blocking 'say'
+    // command doesn't deadlock the main thread's RunLoop.
+    DispatchQueue.global().async {
+        sayTime()
+    }
+}
+
+// 4. Add the timer to the main RunLoop
+RunLoop.main.add(timer, forMode: .common)
+
+// 5. Keep the script alive.
+RunLoop.main.run()
