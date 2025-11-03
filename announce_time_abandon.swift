@@ -55,14 +55,12 @@ func say(_ text: String) {
     // Create a shell-safe version of the text
     let safeText = text.replacingOccurrences(of: "'", with: "'\\''")
     
-    // --- CHANGE 1: ---
     // Run 'say' without the -v flag to use the system default voice
     // (which you've confirmed is your Personal Voice).
     shell("/usr/bin/say '\(safeText)'")
 }
 
 func sayTime() {
-    // --- CHANGE 2: ---
     // Sleep for 500ms (0.5s) to ensure we are safely
     // past the 'xx:xx:59.x' rounding error.
     Thread.sleep(forTimeInterval: 0.5)
@@ -139,6 +137,36 @@ func trap(signal: Int32, handler: @escaping () -> Void) {
     signalSources.append(source)
 }
 
+// MARK: - Timer Logic
+
+/**
+ * This function creates a self-perpetuating chain of one-shot timers.
+ * It schedules one announcement and, when it fires, it calls itself
+ * to schedule the next one, re-aligning to the clock every time.
+ */
+func scheduleNextAnnouncement() {
+    // 1. Calculate the wait time *from now*.
+    let waitTime = getWaitTimeForAlignment()
+
+    // 2. Schedule a *one-shot* timer.
+    Timer.scheduledTimer(
+        withTimeInterval: waitTime,
+        repeats: false // This is the key: NOT repeating
+    ) { _ in
+        // 3. The timer fired. Do two things:
+        
+        // a) Announce the time in the background.
+        DispatchQueue.global().async {
+            sayTime()
+        }
+        
+        // b) Schedule the *next* announcement.
+        // This creates a chain of one-shot timers,
+        // re-aligning to the clock each time.
+        scheduleNextAnnouncement()
+    }
+}
+
 // MARK: - Main Script Logic (Top-Level Code)
 
 // 1. Set up signal handlers
@@ -153,30 +181,17 @@ let sayNow = args.contains("--now")
 // 3. Main Program
 if sayNow {
     print("`--now` flag detected. Announcing current time first.")
+    // We run this in the background so the script
+    // can continue immediately to the timer setup.
     DispatchQueue.global().async {
         sayTime()
     }
 }
 
-let waitTime = getWaitTimeForAlignment()
-print("Alignment complete. Starting main announcement loop.")
+// 4. Start the timer chain.
+print("Starting announcement scheduler.")
 print("Using system default voice (Personal Voice).")
-
-let timer = Timer(
-    fire: Date().addingTimeInterval(waitTime),
-    interval: INTERVAL,
-    repeats: true
-) { _ in
-    
-    // We dispatch to a background thread so the blocking 'say'
-    // command doesn't deadlock the main thread's RunLoop.
-    DispatchQueue.global().async {
-        sayTime()
-    }
-}
-
-// 4. Add the timer to the main RunLoop
-RunLoop.main.add(timer, forMode: .common)
+scheduleNextAnnouncement()
 
 // 5. Keep the script alive.
 RunLoop.main.run()
