@@ -46,7 +46,7 @@ func say(_ text: String) {
         speechSynthesizer.setVoice(voice)
     } // If nil, it uses the system default
     
-    // Start speaking a simple string
+    // Start speaking the string (which may now contain SSML)
     speechSynthesizer.startSpeaking(text)
     
     semaphore.wait()
@@ -58,12 +58,18 @@ func sayTime() {
     
     let now = Date()
     let timeString = timeFormatter.string(from: now)
-    let announcement = timeString
+    
+    // --- SSML FIX ---
+    // Wrap the time string in SSML to explicitly force the
+    // language context to British English (en-GB).
+    let announcement = "<?xml version=\"1.0\"?><speak xml:lang=\"en-US\">\(timeString)</speak>"
+    // --- END FIX ---
     
     let logTimestamp = now.formatted(
         .dateTime.year().month().day().hour().minute().second()
     )
-    print("[\(logTimestamp)] Announcing: \(announcement)")
+    // We'll just log the plain time string for simplicity
+    print("[\(logTimestamp)] Announcing: \(timeString)")
     
     say(announcement)
 }
@@ -150,10 +156,7 @@ func loadPreferredVoice() {
     }
     
     // 2. If not found, fall back to "Daniel"
-    
-    // --- THIS IS THE FIXED LINE ---
     let danielVoiceID = NSSpeechSynthesizer.VoiceName(rawValue: "com.apple.speech.synthesis.voice.daniel")
-    
     if availableVoices.contains(danielVoiceID) {
         print("-> Personal Voice not found. Using 'Daniel'.")
         selectedVoice = danielVoiceID
